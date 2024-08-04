@@ -236,13 +236,53 @@ class OnlineForecaster:
 #     forecast_t = forecaster.predict(X_t.reshape(1, -1))
 
 # 15. Handling Stock-outs (Censored Demand Estimation)
-def estimate_censored_demand(observed_sales, stock_levels, method='simple'):
+from statsmodels.discrete.discrete_model import Probit
+from statsmodels.regression.linear_model import OLS
+import numpy as np
+import pandas as pd
+
+def heckman_correction(observed_sales, stock_levels, features):
+    """
+    Implement Heckman correction method for censored demand estimation.
+    
+    Args:
+    observed_sales (pd.Series): Observed sales data.
+    stock_levels (pd.Series): Available stock levels.
+    features (pd.DataFrame): Features for both selection and outcome equations.
+    
+    Returns:
+    pd.Series: Estimated true demand.
+    """
+    # Create binary indicator for stock-out
+    stock_out = (observed_sales >= stock_levels).astype(int)
+    
+    # Step 1: Probit model for selection equation
+    probit_model = Probit(stock_out, features)
+    probit_results = probit_model.fit(disp=0)
+    
+    # Calculate inverse Mills ratio
+    imr = probit_results.predict(features) / (1 - probit_results.predict(features))
+    
+    # Step 2: OLS with correction for outcome equation
+    features_with_imr = features.copy()
+    features_with_imr['imr'] = imr
+    
+    ols_model = OLS(observed_sales, features_with_imr)
+    ols_results = ols_model.fit()
+    
+    # Step 3: Predict corrected demand
+    corrected_demand = ols_results.predict(features_with_imr)
+    
+    return pd.Series(corrected_demand, index=observed_sales.index)
+
+def estimate_censored_demand(observed_sales, stock_levels, features=None, method='simple'):
     """
     Estimate true demand from censored sales data.
     
     Args:
     observed_sales (pd.Series): Observed sales data.
     stock_levels (pd.Series): Available stock levels.
+    features (pd.DataFrame): Features for Heckman correction (required if method='heckman').
     method (str): Estimation method ('simple' or 'heckman').
     
     Returns:
@@ -251,14 +291,19 @@ def estimate_censored_demand(observed_sales, stock_levels, method='simple'):
     if method == 'simple':
         return np.maximum(observed_sales, stock_levels)
     elif method == 'heckman':
-        # Implement Heckman correction method here
-        # This is a placeholder and would require more complex implementation
-        pass
+        if features is None:
+            raise ValueError("Features are required for Heckman correction method.")
+        return heckman_correction(observed_sales, stock_levels, features)
     else:
         raise ValueError("Invalid method. Choose 'simple' or 'heckman'.")
 
 # Example usage:
-# estimated_demand = estimate_censored_demand(df['observed_sales'], df['stock_levels'])
+# features = pd.DataFrame({
+#     'price': df['price'],
+#     'promotion': df['promotion'],
+#     'day_of_week': df.index.dayofweek
+# })
+# estimated_demand = estimate_censored_demand(df['observed_sales'], df['stock_levels'], features, method='heckman')
 
 # 16. Ensemble Forecasting
 def ensemble_forecast(models, X, weights=None):
